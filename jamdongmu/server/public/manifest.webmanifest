@@ -1,0 +1,14 @@
+{
+  "name": "잠동무",
+  "short_name": "잠동무",
+  "description": "잠 안 오는 사람끼리 목소리로 이어져 같이 잠드는 앱",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1220",
+  "theme_color": "#0d1220",
+  "lang": "ko",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
