@@ -24,7 +24,10 @@ function iceServers() {
 
 const app = express();
 // 웹앱 화면 (public 폴더)
-app.use(express.static(require("path").join(__dirname, "public"), { maxAge: "1h" }));
+// 화면 파일은 항상 새로 받아요 (업데이트하면 바로 반영되게)
+app.use(express.static(require("path").join(__dirname, "public"), {
+  setHeaders: (res) => res.setHeader("Cache-Control", "no-cache"),
+}));
 app.get("/health", (_req, res) => res.json({ ok: true, awake: io.engine.clientsCount, waiting: queue.length }));
 
 const server = http.createServer(app);
