@@ -14,7 +14,7 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gowun+Dodum&display=swap">
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=2">
 </head>
 <body>
 <div class="wrap">
@@ -25,14 +25,33 @@
 
   <!-- 처음 화면 -->
   <section class="screen" id="s-home">
-    <div class="sky" id="sky" aria-hidden="true"></div>
+    <div class="sky" id="sky" aria-hidden="true">
+      <div class="sky-mongle" id="home-mongle"></div>
+    </div>
     <div class="stack-8">
       <h1 id="greet">아직 깨어 있나요?</h1>
       <p class="muted" id="awake">밤하늘에 연결하는 중…</p>
     </div>
+
+    <div class="stack-8" id="friendbox" hidden>
+      <span class="section-label">또 만나고 싶은 잠동무</span>
+      <div class="friends" id="friends"></div>
+    </div>
+
     <label class="field" for="nick">내 이름 (상대에게 보여요)
       <input type="text" id="nick" maxlength="12" autocomplete="off">
     </label>
+    <div class="stack-8">
+      <span class="section-label">오늘 밤은</span>
+      <div class="modes" id="modes" role="radiogroup" aria-label="통화 방식">
+        <button type="button" class="mode" data-mode="chat" role="radio">
+          <b>수다 떨고 싶어요</b><span>도란도란 이야기하다 잠들어요</span>
+        </button>
+        <button type="button" class="mode" data-mode="quiet" role="radio">
+          <b>말없이 같이 잠들어요</b><span>말 안 해도 돼요. 숨소리만 나눠요</span>
+        </button>
+      </div>
+    </div>
     <div class="stack-8">
       <span class="section-label">지금 기분</span>
       <div class="chips" id="moods"></div>
@@ -46,9 +65,12 @@
 
   <!-- 기다리는 화면 -->
   <section class="screen" id="s-wait" hidden>
-    <div class="moon" aria-hidden="true"></div>
+    <div class="wait-art" aria-hidden="true">
+      <div class="moon"></div>
+      <div class="wait-mongle" id="wait-mongle"></div>
+    </div>
     <div class="center stack-8">
-      <h1>잠 못 드는 사람을<br>기다리는 중</h1>
+      <h1 id="waittitle">잠 못 드는 사람을<br>기다리는 중</h1>
       <p class="muted" id="waitinfo">같은 밤을 보내는 누군가가 들어오면 바로 연결돼요.</p>
     </div>
     <div class="bottom">
@@ -68,11 +90,11 @@
 
     <div class="breath" id="breath">
       <div class="patlabel" id="patlabel"></div>
-      <div class="orb" id="orb"></div>
+      <div class="breath-mongle" id="orb"></div>
       <div class="count" id="bcount"></div>
       <div class="cue" id="cue">들이쉬고</div>
     </div>
-    <p class="muted small center" style="margin-top:-8px">4초 들이쉬고 · 7초 멈추고 · 8초 내쉬기. 둘이 같은 박자로 움직여요.</p>
+    <p class="muted small center" style="margin-top:-8px">몽글이를 따라 4초 들이쉬고 · 7초 멈추고 · 8초 내쉬기. 둘이 같은 박자예요.</p>
 
     <div class="stack-8">
       <span class="section-label">함께 듣는 소리</span>
@@ -90,6 +112,7 @@
     <div class="row">
       <button class="ghost" id="mute" aria-pressed="false">마이크 끄기</button>
       <button class="ghost" id="pat">토닥이기</button>
+      <button class="ghost like" id="like" aria-pressed="false">또 만나고 싶어요 ♡</button>
     </div>
 
     <div class="stack-8">
@@ -101,20 +124,21 @@
       <button class="primary" id="sleep">나 이제 잘게</button>
       <button class="ghost" id="hangup">통화 끝내기</button>
     </div>
-    <div class="center small" id="blockbox">
-      <button class="linkish" id="block">불편한 상대인가요? 차단하기</button>
-    </div>
+    <div class="center small" id="blockbox"></div>
   </section>
 
   <!-- 통화 끝 -->
   <section class="screen" id="s-ended" hidden>
     <div class="spacer"></div>
+    <div class="end-mongle" id="end-mongle"></div>
     <div class="center stack-8">
       <h1>통화가 끝났어요</h1>
       <p class="muted" id="endtext"></p>
+      <p class="muted small" id="endlike"></p>
     </div>
     <div class="spacer"></div>
     <div class="bottom">
+      <button class="ghost like" id="like2" aria-pressed="false">또 만나고 싶어요 ♡</button>
       <button class="primary" id="again">다른 사람 찾기</button>
       <button class="ghost" id="home">처음으로</button>
     </div>
@@ -123,6 +147,7 @@
 
 <div class="night" id="night" hidden>
   <div>
+    <div class="night-mongle" id="night-mongle"></div>
     <div class="zz">둘 다 잠들었어요.<br>잘 자요.</div>
     <div class="t" id="nightt"></div>
     <button class="ghost nightbtn" id="wake">다시 깼어요</button>
@@ -131,6 +156,7 @@
 
 <audio id="remote" autoplay playsinline></audio>
 <script src="/socket.io/socket.io.js"></script>
-<script src="/app.js"></script>
+<script src="/mascot.js?v=2"></script>
+<script src="/app.js?v=2"></script>
 </body>
 </html>
