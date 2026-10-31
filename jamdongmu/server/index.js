@@ -33,7 +33,33 @@ const io = new Server(server, { cors: { origin: "*" }, pingInterval: 20000, ping
 const queue = [];                 // 짝을 기다리는 socket 목록 (먼저 온 순서)
 const blocked = new Map();        // deviceId -> Set(deviceId) : 서로 다시 연결하지 않을 사이
 const clean = (s, n) => String(s ?? "").replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, n);
-const SOUNDS = new Set(["off", "rain", "wave", "fan"]);
+const SOUNDS = new Set(["off", "rain", "wave", "fan", "fire", "cricket", "train", "cafe"]);
+const MODES = new Set(["chat", "quiet"]);   // 수다 떨고 싶어요 / 말없이 같이 잠들어요
+
+// "또 만나기": 서로 좋다고 누른 두 사람만 아는 비밀 열쇠(friend key).
+// 열쇠는 각자의 휴대폰에만 저장되고, 서버는 지금 접속한 사람들의 열쇠만 잠깐 기억해요.
+// (서버가 다시 시작돼도 휴대폰에 열쇠가 남아 있어서 친구 관계가 사라지지 않아요.)
+const keyIndex = new Map();       // key -> Set(socket.id)
+const cleanKeys = (arr) => Array.isArray(arr) ? [...new Set(arr.map((k) => clean(k, 40)).filter((k) => /^[a-z0-9]{16,40}$/.test(k)))].slice(0, 50) : [];
+function setKeys(socket, keys) {
+  const before = socket.data.friends || new Set();
+  before.forEach((k) => { const s = keyIndex.get(k); if (s) { s.delete(socket.id); if (!s.size) keyIndex.delete(k); } });
+  socket.data.friends = new Set(keys);
+  socket.data.friends.forEach((k) => { if (!keyIndex.has(k)) keyIndex.set(k, new Set()); keyIndex.get(k).add(socket.id); });
+  notifyFriends(new Set([...before, ...socket.data.friends]));
+}
+function onlineKeysFor(socket) {
+  return [...(socket.data.friends || [])].filter((k) => [...(keyIndex.get(k) || [])].some((id) => id !== socket.id));
+}
+function notifyFriends(keys) {
+  const ids = new Set();
+  keys.forEach((k) => (keyIndex.get(k) || []).forEach((id) => ids.add(id)));
+  ids.forEach((id) => { const s = io.sockets.sockets.get(id); s?.emit("friends-online", { keys: onlineKeysFor(s) }); });
+}
+function sharedKey(a, b) {
+  for (const k of a.data.friends || []) if (b.data.friends?.has(k)) return k;
+  return null;
+}
 
 function stats() {
   return { awake: io.engine.clientsCount, waiting: queue.length };
@@ -63,21 +89,28 @@ function pair(a, b) {
   a.data.partnerId = b.id;
   b.data.partnerId = a.id;
   const callId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const friendKey = sharedKey(a, b);
+  const mode = a.data.mode === b.data.mode ? a.data.mode : "chat";
+  for (const [s, o] of [[a, b], [b, a]]) {
+    s.data.lastCallId = callId; s.data.lastPartnerId = o.id; s.data.likedCall = null;
+  }
   // 먼저 기다린 사람이 offer를 만듭니다 (initiator)
-  a.emit("matched", { callId, partner: profile(b), initiator: true });
-  b.emit("matched", { callId, partner: profile(a), initiator: false });
+  a.emit("matched", { callId, mode, friendKey, partner: profile(b), initiator: true });
+  b.emit("matched", { callId, mode, friendKey, partner: profile(a), initiator: false });
 }
 
+function canPair(a, b) {
+  return a !== b && a.data.deviceId !== b.data.deviceId && !isBlocked(a, b);
+}
 function tryMatch(socket) {
-  for (let i = 0; i < queue.length; i++) {
-    const other = queue[i];
-    if (other === socket || other.data.deviceId === socket.data.deviceId) continue;
-    if (isBlocked(socket, other)) continue;
-    queue.splice(i, 1);
-    pair(other, socket);
-    return true;
-  }
-  return false;
+  // 1순위: 또 만나기로 한 동무가 기다리고 있으면 모드와 상관없이 먼저 이어 줘요
+  let i = queue.findIndex((o) => canPair(socket, o) && sharedKey(socket, o));
+  // 2순위: 같은 모드(수다 / 말없이)를 고른 사람 중 가장 오래 기다린 사람
+  if (i < 0) i = queue.findIndex((o) => canPair(socket, o) && o.data.mode === socket.data.mode);
+  if (i < 0) return false;
+  const [other] = queue.splice(i, 1);
+  pair(other, socket);
+  return true;
 }
 
 function endCall(socket, reason) {
@@ -95,17 +128,22 @@ io.on("connection", (socket) => {
   socket.data.nick = clean(auth.nick, 12) || "이름 없는 별";
   socket.data.mood = clean(auth.mood, 20);
   socket.data.partnerId = null;
+  socket.data.mode = "chat";
 
   socket.emit("hello", { iceServers: iceServers(), ...stats() });
+  setKeys(socket, cleanKeys(auth.friends));
   broadcastStats();
+
+  socket.on("friends", (m = {}) => setKeys(socket, cleanKeys(m.keys)));
 
   socket.on("profile", (p = {}) => {
     socket.data.nick = clean(p.nick, 12) || socket.data.nick;
     socket.data.mood = clean(p.mood, 20);
   });
 
-  socket.on("find", () => {
+  socket.on("find", (m = {}) => {
     if (socket.data.partnerId) return;
+    socket.data.mode = MODES.has(m.mode) ? m.mode : "chat";
     removeFromQueue(socket);
     if (!tryMatch(socket)) queue.push(socket);
     broadcastStats();
@@ -131,6 +169,22 @@ io.on("connection", (socket) => {
   socket.on("sound", (m = {}) => { if (SOUNDS.has(m.k)) partnerOf(socket)?.emit("sound", { k: m.k }); });
   socket.on("asleep", (m = {}) => partnerOf(socket)?.emit("asleep", { v: !!m.v }));
 
+  // 또 만나고 싶어요: 통화 중이나 끝난 직후에 눌러요. 둘 다 누르면 열쇠를 나눠 줘요.
+  socket.on("like", () => {
+    const callId = socket.data.lastCallId;
+    if (!callId) return;
+    socket.data.likedCall = callId;
+    const p = io.sockets.sockets.get(socket.data.lastPartnerId);
+    if (!p || p.data.lastCallId !== callId) return;
+    if (p.data.likedCall === callId) {
+      const key = sharedKey(socket, p) || (require("crypto").randomBytes(15).toString("hex"));
+      socket.emit("friended", { key, nick: p.data.nick });
+      p.emit("friended", { key, nick: socket.data.nick });
+    } else {
+      p.emit("liked-you");
+    }
+  });
+
   socket.on("hangup", (m = {}) => {
     const p = partnerOf(socket);
     if (m.block && p) {
@@ -142,6 +196,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("disconnect", () => {
+    setKeys(socket, []);
     removeFromQueue(socket);
     endCall(socket, "disconnected");
     broadcastStats();
