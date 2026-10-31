@@ -18,6 +18,35 @@
   const MOODS = ["뒤척이는 중", "생각이 많아요", "그냥 심심해요", "내일이 걱정돼요"];
   let mood = store.get("jd-mood") || MOODS[0];
 
+  // 오늘 밤은: 수다(chat) / 말없이(quiet)
+  let mode = store.get("jd-mode") === "quiet" ? "quiet" : "chat";
+  function renderModes() {
+    document.querySelectorAll("#modes .mode").forEach((b) => b.setAttribute("aria-checked", String(b.dataset.mode === mode)));
+  }
+  document.querySelectorAll("#modes .mode").forEach((b) => b.addEventListener("click", () => { mode = b.dataset.mode; store.set("jd-mode", mode); renderModes(); }));
+  renderModes();
+
+  // 또 만나고 싶은 잠동무: 둘만 아는 열쇠를 이 휴대폰에만 저장해요
+  let friends = [];
+  try { friends = JSON.parse(store.get("jd-friends") || "[]").filter((f) => f && typeof f.key === "string"); } catch { friends = []; }
+  let onlineKeys = new Set();
+  const saveFriends = () => store.set("jd-friends", JSON.stringify(friends.slice(0, 50)));
+  const friendKeys = () => friends.map((f) => f.key);
+  function renderFriends() {
+    $("friendbox").hidden = friends.length === 0;
+    const box = $("friends"); box.innerHTML = "";
+    friends.forEach((f) => {
+      const on = onlineKeys.has(f.key);
+      const el = document.createElement("div"); el.className = "friend" + (on ? " on" : "");
+      const dot = document.createElement("span"); dot.className = "dot";
+      const name = document.createElement("span"); name.textContent = f.nick + (on ? " · 깨어 있어요" : "");
+      const x = document.createElement("button"); x.className = "x"; x.type = "button"; x.textContent = "×"; x.setAttribute("aria-label", f.nick + " 지우기");
+      x.onclick = () => { friends = friends.filter((g) => g.key !== f.key); saveFriends(); socket.emit("friends", { keys: friendKeys() }); renderFriends(); };
+      el.append(dot, name, x); box.appendChild(el);
+    });
+    renderHome();
+  }
+
   function chipRow(el, items, isOn, onPick) {
     el.innerHTML = "";
     items.forEach(([key, label]) => {
@@ -91,6 +120,73 @@
     return (bufs[type] = buf);
   }
   function src(type) { const s = ac.createBufferSource(); s.buffer = noise(type); s.loop = true; s.start(); return s; }
+  // 패턴이 있는 소리는 한 번 만들어 둔 조각을 반복 재생해요
+  function made(name, seconds, fill) {
+    if (bufs[name]) return bufs[name];
+    const sr = ac.sampleRate, len = Math.floor(sr * seconds), buf = ac.createBuffer(1, len, sr);
+    fill(buf.getChannelData(0), sr, len);
+    // 끝과 처음을 부드럽게 이어 붙여요
+    const d = buf.getChannelData(0), f = Math.floor(sr * 0.25);
+    for (let i = 0; i < f; i++) { const t = i / f; d[i] = d[i] * t + d[len - f + i] * (1 - t); }
+    return (bufs[name] = buf);
+  }
+  function loop(buf) { const s = ac.createBufferSource(); s.buffer = buf; s.loop = true; s.loopEnd = buf.duration - 0.25; s.start(); return s; }
+  function brownInto(d, len, amt) { let last = 0; for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] += last * 3.5 * amt; } }
+  const BUILDERS = {
+    fire: (d, sr, len) => {
+      brownInto(d, len, 0.5);
+      for (let n = 0; n < 90; n++) {           // 타닥타닥
+        const at = Math.floor(Math.random() * (len - sr * 0.05)), amp = 0.2 + Math.random() * 0.6, dec = sr * (0.002 + Math.random() * 0.008);
+        for (let i = 0; i < sr * 0.04; i++) d[at + i] += (Math.random() * 2 - 1) * amp * Math.exp(-i / dec);
+      }
+    },
+    cricket: (d, sr, len) => {
+      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * 0.015;   // 밤 공기
+      const period = sr * 1.2;
+      for (let start = sr * 0.1; start < len - sr * 0.5; start += period) {  // 찌르르 찌르르
+        for (const off of [0, 0.3]) {
+          const s0 = Math.floor(start + off * sr);
+          for (let i = 0; i < sr * 0.18; i++) {
+            const t = i / sr, gate = Math.sin(2 * Math.PI * 28 * t) > 0 ? 1 : 0;
+            d[s0 + i] += Math.sin(2 * Math.PI * 4300 * t) * 0.12 * gate * Math.sin(Math.PI * i / (sr * 0.18));
+          }
+        }
+      }
+    },
+    train: (d, sr, len) => {
+      brownInto(d, len, 0.7);
+      const period = sr * 1.0;
+      for (let start = 0; start < len - sr * 0.4; start += period) {   // 덜컹-덜컹
+        for (const off of [0, 0.16]) {
+          const s0 = Math.floor(start + off * sr);
+          for (let i = 0; i < sr * 0.25; i++) {
+            const t = i / sr, env = Math.exp(-t * 22);
+            d[s0 + i] += (Math.sin(2 * Math.PI * 62 * t) * 0.5 + (Math.random() * 2 - 1) * 0.12) * env;
+          }
+        }
+      }
+    },
+    cafe: (d, sr, len) => {
+      let b0 = 0, b1 = 0, b2 = 0;
+      for (let i = 0; i < len; i++) {         // 웅성웅성
+        const w = Math.random() * 2 - 1; b0 = .99 * b0 + w * .05; b1 = .96 * b1 + w * .1; b2 = .8 * b2 + w * .2;
+        const t = i / sr, swell = 0.6 + 0.25 * Math.sin(2 * Math.PI * t / 2.3) + 0.15 * Math.sin(2 * Math.PI * t / 0.7);
+        d[i] = (b0 + b1 + b2) * 0.35 * swell;
+      }
+      for (let n = 0; n < 5; n++) {           // 잔 부딪히는 소리
+        const s0 = Math.floor(Math.random() * (len - sr)), f = 2400 + Math.random() * 1600;
+        for (let i = 0; i < sr * 0.5; i++) { const t = i / sr; d[s0 + i] += Math.sin(2 * Math.PI * f * t) * 0.08 * Math.exp(-t * 12); }
+      }
+    },
+  };
+  const LEN = { fire: 8, cricket: 6, train: 6, cafe: 9 };
+  function patterned(name, f1, f2) {
+    const s = loop(made(name, LEN[name], BUILDERS[name]));
+    let node = s;
+    if (f1) node = node.connect(filt("highpass", f1));
+    if (f2) node = node.connect(filt("lowpass", f2));
+    node.connect(master); return [s];
+  }
   function filt(type, f) { const x = ac.createBiquadFilter(); x.type = type; x.frequency.value = f; return x; }
   const SOUNDS = {
     off: { label: "조용히" },
@@ -102,6 +198,10 @@
       s.connect(filt("lowpass", 1200)).connect(g).connect(master); return [s, lfo];
     } },
     fan: { label: "선풍기", build() { const s = src("brown"), g = ac.createGain(); g.gain.value = .8; s.connect(filt("lowpass", 500)).connect(g).connect(master); return [s]; } },
+    fire: { label: "모닥불", build() { return patterned("fire", 0, 5000); } },
+    cricket: { label: "귀뚜라미", build() { return patterned("cricket", 300, 0); } },
+    train: { label: "기차 안", build() { return patterned("train", 0, 1800); } },
+    cafe: { label: "카페", build() { return patterned("cafe", 150, 3500); } },
   };
   function playSound(k) {
     if (!SOUNDS[k]) return;
@@ -127,9 +227,9 @@
   function tickBreath() {
     if ($("s-call").hidden) return;
     const t = Date.now() % CYCLE; let cue, scale, left;
-    if (t < 4000) { cue = "들이쉬고"; scale = 1 + .5 * (t / 4000); left = 4 - Math.floor(t / 1000); }
-    else if (t < 11000) { cue = "잠깐 멈추고"; scale = 1.5; left = 7 - Math.floor((t - 4000) / 1000); }
-    else { cue = "천천히 내쉬고"; scale = 1.5 - .5 * ((t - 11000) / 8000); left = 8 - Math.floor((t - 11000) / 1000); }
+    if (t < 4000) { cue = "들이쉬고"; scale = 1 + .35 * (t / 4000); left = 4 - Math.floor(t / 1000); }
+    else if (t < 11000) { cue = "잠깐 멈추고"; scale = 1.35; left = 7 - Math.floor((t - 4000) / 1000); }
+    else { cue = "천천히 내쉬고"; scale = 1.35 - .35 * ((t - 11000) / 8000); left = 8 - Math.floor((t - 11000) / 1000); }
     $("orb").style.transform = `scale(${scale.toFixed(3)})`;
     $("cue").textContent = cue; $("bcount").textContent = left;
   }
@@ -150,10 +250,12 @@
       phase === "offline" ? "서버에 연결할 수 없어요. 인터넷을 확인하거나 잠시 뒤 다시 열어 주세요." :
       others === 0 ? "지금은 당신만 깨어 있어요. 기다리면 누군가 올지도 몰라요." :
       `지금 ${others}명이 깨어 있어요` + (stats.waiting ? ` · ${stats.waiting}명이 기다리는 중` : "");
+    const onFriends = friends.filter((f) => onlineKeys.has(f.key));
+    if (phase === "idle" && onFriends.length) $("awake").textContent += ` · ${onFriends[0].nick}님도 깨어 있어요. 찾기를 누르면 먼저 이어 드려요.`;
     $("waitinfo").textContent = others ? `깨어 있는 사람 ${others}명 · 누군가 찾으면 바로 연결돼요.` : "같은 밤을 보내는 누군가가 들어오면 바로 연결돼요.";
     const sky = $("sky"), n = Math.min(others, 30) + 1;
-    if (sky.childElementCount !== n) {
-      sky.innerHTML = "";
+    if (sky.querySelectorAll(".star").length !== n) {
+      sky.querySelectorAll(".star").forEach((s) => s.remove());
       for (let i = 0; i < n; i++) {
         const s = document.createElement("div"); s.className = "star" + (i === 0 ? " me" : "");
         const r1 = ((Math.sin(i * 12.9898 + 1) * 43758.5453) % 1 + 1) % 1, r2 = ((Math.sin(i * 78.233 + 2) * 12345.678) % 1 + 1) % 1;
@@ -162,6 +264,12 @@
       }
     }
   }
+  // 몽글이 자리
+  const hNow = new Date().getHours();
+  $("home-mongle").innerHTML = mongle(hNow < 5 ? "sleepy" : "awake");
+  $("wait-mongle").innerHTML = mongle("sleepy");
+  $("orb").innerHTML = mongle("awake");
+  $("night-mongle").innerHTML = mongle("asleep");
 
   // ---------- 통화 화면 요소 ----------
   function addLog(text, who) {
@@ -173,10 +281,32 @@
     const l = $("patlabel"); l.textContent = label; l.classList.add("on"); setTimeout(() => l.classList.remove("on"), 1800);
     try { navigator.vibrate?.([30, 80, 30]); } catch {}
   }
+  // 또 만나고 싶어요
+  let liked = false, likedByThem = false, callFriendKey = null, partnerNick = "";
+  function renderLike() {
+    const already = !!callFriendKey && friends.some((f) => f.key === callFriendKey);
+    ["like", "like2"].forEach((id) => {
+      const b = $(id);
+      b.hidden = already;
+      b.setAttribute("aria-pressed", String(liked));
+      b.textContent = liked ? "또 만나고 싶어요 ♥" : "또 만나고 싶어요 ♡";
+    });
+    $("endlike").textContent = already ? `${partnerNick}님은 이제 서로의 잠동무예요. 다음에 둘 다 깨어 있으면 먼저 이어 드려요.`
+      : liked && likedByThem ? "" : liked ? "상대도 누르면 다음에 먼저 이어 드려요."
+      : likedByThem ? `${partnerNick}님이 또 만나고 싶어 해요.` : "";
+    $("end-mongle").innerHTML = mongle(already || likedByThem ? "happy" : "awake");
+  }
+  function doLike() { if (liked) return; liked = true; socket.emit("like"); renderLike(); }
+  $("like").onclick = doLike; $("like2").onclick = doLike;
+
   let startedAt = 0;
   function renderStatus() {
     const p = $("pstatus");
-    if (phase === "live") { p.classList.add("live"); p.textContent = `통화 중 · ${Math.floor((Date.now() - startedAt) / 60000)}분`; }
+    if (phase === "live") {
+      p.classList.add("live");
+      const label = p.dataset.mode === "quiet" ? "말없이 함께" : "통화 중";
+      p.textContent = `${label} · ${Math.floor((Date.now() - startedAt) / 60000)}분`;
+    }
     else { p.classList.remove("live"); p.textContent = "목소리 잇는 중…"; }
   }
   setInterval(() => { if (phase === "live") renderStatus(); }, 20000);
@@ -206,6 +336,7 @@
     $("sleep").textContent = v ? "아직 깨어 있어요" : "나 이제 잘게";
     socket.emit("asleep", { v });
     if (v) addLog(timerMin ? `잘 자요. ${timerMin}분 뒤에 소리와 통화가 조용히 꺼져요.` : "잘 자요. 통화는 계속 이어져요.", "sys");
+    $("orb").innerHTML = mongle(v ? "sleepy" : "awake");
     armTimer(); renderNight();
   }
 
@@ -294,10 +425,10 @@
   }
 
   // ---------- 서버 연결 ----------
-  const socket = io({ transports: ["websocket"], auth: { deviceId, nick: nick(), mood } });
+  const socket = io({ transports: ["websocket"], auth: { deviceId, nick: nick(), mood, friends: friendKeys() } });
   function sendProfile() { socket.emit("profile", { nick: nick(), mood }); }
 
-  socket.on("connect", () => { if (phase === "connecting" || phase === "offline") setPhase("idle"); sendProfile(); });
+  socket.on("connect", () => { if (phase === "connecting" || phase === "offline") setPhase("idle"); sendProfile(); socket.emit("friends", { keys: friendKeys() }); });
   socket.on("connect_error", () => { if (phase === "connecting") setPhase("offline"); });
   socket.on("disconnect", () => {
     if (phase === "calling" || phase === "live") end("network");
@@ -305,13 +436,22 @@
   });
   socket.on("hello", (h) => { iceServers = h.iceServers || []; stats = { awake: h.awake, waiting: h.waiting }; renderHome(); });
   socket.on("stats", (s) => { stats = s; renderHome(); });
-  socket.on("matched", async ({ partner, initiator }) => {
-    $("pname").textContent = partner?.nick || "이름 없는 별";
+  socket.on("matched", async ({ partner, initiator, mode: callMode, friendKey }) => {
+    partnerNick = partner?.nick || "이름 없는 별";
+    callFriendKey = friendKey && friends.some((f) => f.key === friendKey) ? friendKey : null;
+    liked = false; likedByThem = false; renderLike();
+    $("pname").textContent = partnerNick;
     $("pmood").textContent = partner?.mood || "";
     $("log").innerHTML = ""; asleep = false; partnerAsleep = false;
     $("sleep").textContent = "나 이제 잘게";
     resetBlock();
     setPhase("calling"); renderStatus(); tickBreath();
+    if (callFriendKey) addLog(`또 만났어요! ${partnerNick}님은 당신의 잠동무예요.`, "sys");
+    if (callMode === "quiet") {
+      addLog("말없이 같이 잠드는 밤이에요. 말하지 않아도 괜찮아요. 숨소리만 나눠요.", "sys");
+      $("sayinput").placeholder = "꼭 하고 싶은 말만 작게 적어요";
+    } else $("sayinput").placeholder = "말하기 어려우면 글로 속삭여요";
+    $("pstatus").dataset.mode = callMode || "chat";
     try { await startPeer(initiator); const later = pending; pending = []; for (const m of later) await handleSignal(m); }
     catch (e) { console.warn(e); socket.emit("hangup", {}); end("mic"); }
   });
@@ -320,6 +460,16 @@
   socket.on("pat", () => patAnim("상대가 토닥였어요"));
   socket.on("sound", (m) => playSound(m.k));
   socket.on("asleep", (m) => { partnerAsleep = !!m.v; if (partnerAsleep) addLog("상대가 잠들었어요.", "sys"); renderNight(); });
+  socket.on("liked-you", () => { likedByThem = true; if (phase === "live" || phase === "calling") addLog(`${partnerNick}님이 또 만나고 싶어 해요 ♡`, "sys"); renderLike(); });
+  socket.on("friended", ({ key, nick: fnick }) => {
+    if (typeof key !== "string") return;
+    callFriendKey = key;
+    if (!friends.some((f) => f.key === key)) { friends.unshift({ key, nick: String(fnick || partnerNick).slice(0, 12), since: Date.now() }); saveFriends(); }
+    socket.emit("friends", { keys: friendKeys() });
+    if (phase === "live" || phase === "calling") { addLog(`이제 ${partnerNick}님과 서로의 잠동무예요. 다음에 둘 다 깨어 있으면 먼저 이어 드려요.`, "sys"); patAnim("♥ 잠동무가 됐어요"); }
+    renderLike(); renderFriends();
+  });
+  socket.on("friends-online", ({ keys }) => { onlineKeys = new Set(Array.isArray(keys) ? keys : []); renderFriends(); });
   socket.on("partner-left", ({ reason }) => end(reason === "disconnected" ? "partner-gone" : "partner-left"));
 
   // ---------- 버튼 ----------
@@ -328,9 +478,13 @@
     ensureAudio();
     remoteAudio.play().catch(() => {});
   }
-  $("find").onclick = () => { unlockAudio(); socket.emit("find"); setPhase("waiting"); };
+  function startFind() {
+    unlockAudio(); socket.emit("find", { mode }); setPhase("waiting");
+    $("waittitle").innerHTML = mode === "quiet" ? "말없이 같이 잠들<br>사람을 기다리는 중" : "잠 못 드는 사람을<br>기다리는 중";
+  }
+  $("find").onclick = startFind;
   $("cancel").onclick = () => { socket.emit("cancel"); setPhase("idle"); };
-  $("again").onclick = () => { unlockAudio(); socket.emit("find"); setPhase("waiting"); };
+  $("again").onclick = startFind;
   $("home").onclick = () => { playSound("off"); setPhase("idle"); };
   $("hangup").onclick = () => hangup(false);
   $("sleep").onclick = () => setAsleep(!asleep);
@@ -361,8 +515,9 @@
     box.appendChild(b);
   }
   resetBlock();
+  renderFriends(); renderLike();
   document.addEventListener("click", () => { if (remoteAudio.srcObject && remoteAudio.paused) remoteAudio.play().catch(() => {}); });
 
   setPhase("connecting");
-  window.__jd = { get phase() { return phase; }, get pc() { return pc; } };
+  window.__jd = { get phase() { return phase; }, get pc() { return pc; }, get friends() { return friends; } };
 })();
